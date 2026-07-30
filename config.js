@@ -5,7 +5,7 @@
 // (or re-deployed) again for backend changes.
 // ============================================================
 window.APP_CONFIG = {
-  APPS_SCRIPT_URL: 'PASTE_YOUR_APPS_SCRIPT_WEB_APP_URL_HERE',
-  SYNC_TOKEN: 'PASTE_YOUR_SECRET_TOKEN_HERE',
+  APPS_SCRIPT_URL: 'https://script.google.com/macros/s/AKfycbymluQYeekyBKX_9M3UFEmdjQjlKbXmFTp0TQ5ZWNNmhxC3oZjbzJKevHhjNsqP951dgg/exec',
+  SYNC_TOKEN: '7fQ2!kLp9xVh3zR8mNc1',
   POLL_INTERVAL_MS: 20000
 };
