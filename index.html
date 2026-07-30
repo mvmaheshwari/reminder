@@ -2,8 +2,16 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>Command Board</title>
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#182129">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Command Board">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-180.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
@@ -62,10 +70,17 @@
   .sync-status{
     font-family:'IBM Plex Mono',monospace; font-size:10px; color:var(--ink-soft);
     margin-top:5px; display:flex; align-items:center; gap:5px; justify-content:flex-end;
+    cursor:pointer;
   }
   .sync-status .dot{width:6px; height:6px; border-radius:50%; background:var(--low);}
   .sync-status.err .dot{background:var(--high);}
   .sync-status.pending .dot{background:var(--medium);}
+  .setup-banner{
+    font-family:'IBM Plex Mono',monospace; font-size:12px; line-height:1.6; color:#7A4A17;
+    background:#FDF1DE; border:1px solid #F0DAB2; border-radius:10px;
+    padding:14px 16px; margin-bottom:18px;
+  }
+  .setup-banner code{background:#F5E2C0; padding:1px 5px; border-radius:4px;}
 
   /* LAYOUT */
   .grid{
@@ -155,12 +170,12 @@
   .task-row.done{opacity:.5;}
   .task-row.done .t-title{text-decoration:line-through;}
   .chk{
-    width:19px; height:19px; border-radius:6px; border:1.5px solid var(--ink-soft);
+    width:26px; height:26px; border-radius:7px; border:1.5px solid var(--ink-soft);
     cursor:pointer; flex-shrink:0; display:flex; align-items:center; justify-content:center;
-    background:var(--card);
+    background:var(--card); font-size:14px;
   }
-  .chk.checked{background:var(--accent); border-color:var(--accent); color:#fff; font-size:12px;}
-  .t-title{flex:1; font-size:13.5px; font-weight:500; min-width:0; word-break:break-word;}
+  .chk.checked{background:var(--accent); border-color:var(--accent); color:#fff; font-size:14px;}
+  .t-title{flex:1; font-size:14px; font-weight:500; min-width:0; word-break:break-word;}
   .t-meta{display:flex; align-items:center; gap:8px; flex-shrink:0;}
   .t-cat{
     font-family:'IBM Plex Mono',monospace; font-size:10px; padding:3px 8px; border-radius:20px;
@@ -168,8 +183,8 @@
   }
   .t-pri{width:8px; height:8px; border-radius:50%; flex-shrink:0;}
   .t-del{
-    background:none; border:none; color:var(--ink-soft); cursor:pointer; font-size:15px;
-    padding:2px 4px; line-height:1; flex-shrink:0;
+    background:none; border:none; color:var(--ink-soft); cursor:pointer; font-size:18px;
+    padding:6px 8px; line-height:1; flex-shrink:0; min-width:32px; min-height:32px;
   }
   .t-del:hover{color:var(--high);}
   .empty{
@@ -207,9 +222,10 @@
     <div class="today-badge">
       <div class="d" id="todayLabel"></div>
       <div class="n" id="todayCompletion">0/0 done today</div>
-      <div class="sync-status" id="syncStatus">syncing...</div>
+      <div class="sync-status" id="syncStatus" onclick="loadTasks()" title="Click to refresh from the sheet">syncing...</div>
     </div>
   </header>
+  <div id="setupBanner" class="setup-banner" style="display:none;"></div>
   <div id="syncBanner" class="sync-banner" style="display:none;"></div>
 
   <div class="grid">
@@ -263,6 +279,7 @@
   </div>
 </div>
 
+<script src="config.js"></script>
 <script>
 const CATEGORIES = [
   {id:'personal', name:'Personal', color:'var(--cat-personal)'},
@@ -289,12 +306,30 @@ function isoOf(d){
 }
 function catInfo(id){ return CATEGORIES.find(c=>c.id===id) || CATEGORIES[0]; }
 
+// ============================================================
+// CLOUD SYNC — backend settings now live entirely in config.js,
+// so updating your Apps Script URL/token never touches this
+// file (no redeploy of the app logic needed).
+// ============================================================
+const CFG = window.APP_CONFIG || {};
+const APPS_SCRIPT_URL = CFG.APPS_SCRIPT_URL || '';
+const SYNC_TOKEN = CFG.SYNC_TOKEN || '';
+const POLL_INTERVAL_MS = CFG.POLL_INTERVAL_MS || 20000;
+
 let syncAvailable = true;
+let pollTimer = null;
 
 function showBanner(msg){
   const b = document.getElementById('syncBanner');
   if(!msg){ b.style.display='none'; return; }
   b.textContent = msg;
+  b.style.display = 'block';
+}
+
+function showSetupBanner(msg){
+  const b = document.getElementById('setupBanner');
+  if(!msg){ b.style.display='none'; return; }
+  b.innerHTML = msg;
   b.style.display = 'block';
 }
 
@@ -309,81 +344,109 @@ function setSyncStatus(state){
     el.innerHTML = '<span class="dot"></span>Syncing...';
   }else if(state==='err'){
     el.classList.add('err');
-    el.innerHTML = '<span class="dot"></span>Not synced';
+    el.innerHTML = '<span class="dot"></span>Not synced (tap to retry)';
   }else if(state==='off'){
     el.classList.add('err');
-    el.innerHTML = '<span class="dot"></span>Sync unavailable';
+    el.innerHTML = '<span class="dot"></span>Not configured';
   }
 }
 
-function hasStorage(){
-  return typeof window.storage !== 'undefined'
-    && window.storage
-    && typeof window.storage.get === 'function'
-    && typeof window.storage.set === 'function';
+function isConfigured(){
+  return APPS_SCRIPT_URL && !APPS_SCRIPT_URL.includes('PASTE_YOUR')
+    && SYNC_TOKEN && !SYNC_TOKEN.includes('PASTE_YOUR');
+}
+async function cloudGet(key){
+  const url = APPS_SCRIPT_URL + '?action=get&key=' + encodeURIComponent(key) + '&token=' + encodeURIComponent(SYNC_TOKEN);
+  const res = await fetch(url);
+  if(!res.ok) throw new Error('HTTP '+res.status);
+  const data = await res.json();
+  if(data.error) throw new Error(data.error);
+  return data.value;
 }
 
-async function loadTasks(){
-  if(!hasStorage()){
+async function cloudSet(key, value){
+  // text/plain avoids a CORS preflight, which Apps Script web apps don't handle.
+  const res = await fetch(APPS_SCRIPT_URL, {
+    method: 'POST',
+    headers: {'Content-Type': 'text/plain;charset=utf-8'},
+    body: JSON.stringify({token: SYNC_TOKEN, key, value})
+  });
+  if(!res.ok) throw new Error('HTTP '+res.status);
+  const data = await res.json();
+  if(data.error) throw new Error(data.error);
+}
+
+async function loadTasks(preserveEditing){
+  if(!isConfigured()){
     syncAvailable = false;
-    tasks = [];
+    tasks = tasks.length ? tasks : [];
     setSyncStatus('off');
-    showBanner('Cross-device sync is off — this page was opened outside the Claude artifact panel, so tasks will only last for this session.');
+    showSetupBanner('<b>Cloud sync isn\'t set up yet.</b><br>Open <code>config.js</code> (not this file) and fill in <code>APPS_SCRIPT_URL</code> and <code>SYNC_TOKEN</code> from your Apps Script deployment. Until then, tasks only last for this browser session.');
     rollOverdue();
     render();
+    startPolling();
+    return;
+  }
+  showSetupBanner(null);
+  // Don't yank focus away from the input field while someone is mid-typing on a poll refresh.
+  if(preserveEditing && document.activeElement && document.activeElement.id==='newTitle' && document.activeElement.value){
     return;
   }
   setSyncStatus('pending');
   try{
-    const res = await window.storage.get('tasks', false);
-    tasks = res ? JSON.parse(res.value) : [];
+    const raw = await cloudGet('tasks');
+    tasks = raw ? JSON.parse(raw) : [];
     syncAvailable = true;
     setSyncStatus('ok');
     showBanner(null);
   }catch(e){
-    // Missing key throws rather than returning null — treat as "no tasks yet".
-    tasks = [];
-    syncAvailable = true;
-    setSyncStatus('ok');
-    showBanner(null);
+    syncAvailable = false;
+    console.error('cloud load failed', e);
+    setSyncStatus('err');
+    showBanner('Could not reach the Google Sheet backend (' + e.message + '). Showing the last data loaded in this browser.');
   }
   rollOverdue();
   render();
+  startPolling();
 }
 
 async function saveTasks(){
-  // Always render from current in-memory state first so the UI never blocks on sync.
-  if(!hasStorage()){
+  if(!isConfigured()){
     syncAvailable = false;
     setSyncStatus('off');
-    showBanner('Cross-device sync is off — changes are only kept for this session.');
     return;
   }
   setSyncStatus('pending');
-  const attempt = async () => {
-    await window.storage.set('tasks', JSON.stringify(tasks), false);
-  };
+  const attempt = () => cloudSet('tasks', JSON.stringify(tasks));
   try{
     await attempt();
     syncAvailable = true;
     setSyncStatus('ok');
     showBanner(null);
   }catch(e){
-    // Retry once after a brief pause before giving up and warning the user.
     try{
-      await new Promise(r=>setTimeout(r, 600));
+      await new Promise(r=>setTimeout(r, 700));
       await attempt();
       syncAvailable = true;
       setSyncStatus('ok');
       showBanner(null);
     }catch(e2){
       syncAvailable = false;
-      console.error('storage set failed after retry', e2);
+      console.error('cloud save failed after retry', e2);
       setSyncStatus('err');
-      showBanner('Couldn\'t sync to your account just now — your tasks are still here, but may not appear on other devices until this reconnects.');
+      showBanner('Couldn\'t save to the sheet just now (' + e2.message + '). Your change is kept here — tap the sync status to retry.');
     }
   }
 }
+
+function startPolling(){
+  if(pollTimer) clearInterval(pollTimer);
+  if(!isConfigured()) return;
+  pollTimer = setInterval(()=>{
+    if(document.visibilityState === 'visible') loadTasks(true);
+  }, POLL_INTERVAL_MS);
+}
+window.addEventListener('focus', ()=>{ if(isConfigured()) loadTasks(true); });
 
 function rollOverdue(){
   const t = todayISO();
@@ -619,6 +682,12 @@ async function draftEmailSummary(){
 }
 
 loadTasks();
+
+if('serviceWorker' in navigator){
+  window.addEventListener('load', ()=>{
+    navigator.serviceWorker.register('sw.js').catch(e=>console.error('SW registration failed', e));
+  });
+}
 </script>
 </body>
 </html>
